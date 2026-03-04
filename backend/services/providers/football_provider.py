@@ -260,14 +260,14 @@ class APIFootballProvider:
                     "position": int(row.get("rank") or 0),
                     "teamName": str(team.get("name") or ""),
                     "teamShort": str(team.get("code") or team.get("name") or ""),
-                    "playedGames": int((goals.get("played") or 0)),
+                    "matches_played": int((goals.get("played") or 0)),
                     "won": int((goals.get("win") or 0)),
                     "draw": int((goals.get("draw") or 0)),
                     "lost": int((goals.get("lose") or 0)),
                     "points": int(row.get("points") or 0),
-                    "goalsFor": gf,
-                    "goalsAgainst": ga,
-                    "goalDifference": int(row.get("goalsDiff") or (gf - ga)),
+                    "goals_scored": gf,
+                    "goals_conceded": ga,
+                    "goal_difference": int(row.get("goalsDiff") or (gf - ga)),
                     "team": str(team.get("name") or ""),
                 }
             )

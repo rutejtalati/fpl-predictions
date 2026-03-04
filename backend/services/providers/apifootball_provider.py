@@ -227,13 +227,13 @@ class ApiFootballProvider:
                     "position": int(row.get("rank") or 0),
                     "teamName": str(team.get("name") or ""),
                     "teamShort": str(team.get("code") or team.get("name") or ""),
-                    "playedGames": int(stats_all.get("played") or 0),
+                    "matches_played": int(stats_all.get("played") or 0),
                     "won": int(stats_all.get("win") or 0),
                     "draw": int(stats_all.get("draw") or 0),
                     "lost": int(stats_all.get("lose") or 0),
-                    "goalsFor": gf,
-                    "goalsAgainst": ga,
-                    "goalDifference": int(row.get("goalsDiff") or (gf - ga)),
+                    "goals_scored": gf,
+                    "goals_conceded": ga,
+                    "goal_difference": int(row.get("goalsDiff") or (gf - ga)),
                     "points": int(row.get("points") or 0),
                     "form": str(row.get("form") or ""),
                     "team": str(team.get("name") or ""),
@@ -535,16 +535,36 @@ class ApiFootballProvider:
             for row in standings:
                 team_name = str(row.get("teamName") or row.get("team") or "").strip()
                 team_id = int(row.get("team_id") or 0)
-                played = float(row.get("playedGames") or 0.0)
+                played = float(row.get("matches_played") or 0.0)
                 if not team_name or played <= 0:
                     continue
-                gfpg = float(row.get("goalsFor") or 0.0) / played
-                gapg = float(row.get("goalsAgainst") or 0.0) / played
-                stats = {"GFpg": gfpg, "GApg": gapg}
+                goals_scored_per_match = float(row.get("goals_scored") or 0.0) / played
+                goals_conceded_per_match = float(row.get("goals_conceded") or 0.0) / played
+                home_played = float(row.get("home_played") or 0.0)
+                away_played = float(row.get("away_played") or 0.0)
+                home_performance = (
+                    (float(row.get("home_gf") or 0.0) - float(row.get("home_ga") or 0.0)) / max(1.0, home_played)
+                )
+                away_performance = (
+                    (float(row.get("away_gf") or 0.0) - float(row.get("away_ga") or 0.0)) / max(1.0, away_played)
+                )
+                form_text = str(row.get("form") or "").upper()
+                form_points = {"W": 1.0, "D": 0.5, "L": 0.0}
+                form_samples = [form_points[ch] for ch in form_text if ch in form_points]
+                recent_form_rating = (
+                    sum(form_samples) / float(len(form_samples)) if form_samples else 0.5
+                )
+                stats = {
+                    "team_attacking_power": goals_scored_per_match,
+                    "team_defensive_strength": goals_conceded_per_match,
+                    "home_performance": home_performance,
+                    "away_performance": away_performance,
+                    "recent_form_rating": recent_form_rating,
+                }
                 team_stats_by_name[team_name.lower()] = stats
                 if team_id > 0:
                     team_stats_by_id[team_id] = stats
-                ga_values.append(gapg)
+                ga_values.append(goals_conceded_per_match)
 
             if not ga_values:
                 self._logger.warning("Predictions skipped: missing standings goals data for code=%s", code)
@@ -556,10 +576,19 @@ class ApiFootballProvider:
                 return self._pred_cache_set(cache_key, [])
 
             # Fallback prevents empty predictions when a team name/id mapping is missing.
-            avg_gfpg = sum((v["GFpg"] for v in (team_stats_by_id.values() or team_stats_by_name.values())), 0.0) / max(
+            average_goals_scored_per_match = sum(
+                (v["team_attacking_power"] for v in (team_stats_by_id.values() or team_stats_by_name.values())),
+                0.0,
+            ) / max(
                 1, len(team_stats_by_id) or len(team_stats_by_name)
             )
-            avg_stats = {"GFpg": avg_gfpg, "GApg": league_gapg}
+            avg_stats = {
+                "team_attacking_power": average_goals_scored_per_match,
+                "team_defensive_strength": league_gapg,
+                "home_performance": 0.0,
+                "away_performance": 0.0,
+                "recent_form_rating": 0.5,
+            }
 
             max_goals = max(1, self.max_goals)
             out: List[Dict[str, Any]] = []
@@ -573,30 +602,34 @@ class ApiFootballProvider:
                 if not home or not away:
                     continue
 
-                xg_home = self.home_adv * hs["GFpg"] * aw["GApg"] / max(league_gapg, 0.01)
-                xg_away = aw["GFpg"] * hs["GApg"] / max(league_gapg, 0.01)
-                xg_home = max(0.05, min(5.0, xg_home))
-                xg_away = max(0.05, min(5.0, xg_away))
+                expected_home_goals = self.home_adv * hs["team_attacking_power"] * aw["team_defensive_strength"] / max(
+                    league_gapg, 0.01
+                )
+                expected_away_goals = aw["team_attacking_power"] * hs["team_defensive_strength"] / max(
+                    league_gapg, 0.01
+                )
+                expected_home_goals = max(0.05, min(5.0, expected_home_goals))
+                expected_away_goals = max(0.05, min(5.0, expected_away_goals))
 
-                p_home = 0.0
-                p_draw = 0.0
-                p_away = 0.0
+                home_win_probability = 0.0
+                draw_probability = 0.0
+                away_win_probability = 0.0
                 p_over_25 = 0.0
                 p_btts = 0.0
                 p_home_cs = 0.0
                 p_away_cs = 0.0
-                score_probs: List[Tuple[int, int, float]] = []
+                score_probability_table: List[Tuple[int, int, float]] = []
                 for i in range(max_goals + 1):
-                    pi = self._poisson_pmf(xg_home, i)
+                    pi = self._poisson_pmf(expected_home_goals, i)
                     for j in range(max_goals + 1):
-                        p = pi * self._poisson_pmf(xg_away, j)
-                        score_probs.append((i, j, p))
+                        p = pi * self._poisson_pmf(expected_away_goals, j)
+                        score_probability_table.append((i, j, p))
                         if i > j:
-                            p_home += p
+                            home_win_probability += p
                         elif i == j:
-                            p_draw += p
+                            draw_probability += p
                         else:
-                            p_away += p
+                            away_win_probability += p
                         if i + j >= 3:
                             p_over_25 += p
                         if i >= 1 and j >= 1:
@@ -606,49 +639,62 @@ class ApiFootballProvider:
                         if i == 0:
                             p_away_cs += p
 
-                total_prob = p_home + p_draw + p_away
+                total_prob = home_win_probability + draw_probability + away_win_probability
                 if total_prob > 0:
-                    p_home /= total_prob
-                    p_draw /= total_prob
-                    p_away /= total_prob
+                    home_win_probability /= total_prob
+                    draw_probability /= total_prob
+                    away_win_probability /= total_prob
                     p_over_25 /= total_prob
                     p_btts /= total_prob
                     p_home_cs /= total_prob
                     p_away_cs /= total_prob
 
-                score_probs.sort(key=lambda t: t[2], reverse=True)
-                most_likely = f"{score_probs[0][0]}-{score_probs[0][1]}" if score_probs else "0-0"
-                top3 = [{"score": f"{i}-{j}", "p": round(float(p), 6)} for i, j, p in score_probs[:3]]
+                score_probability_table.sort(key=lambda t: t[2], reverse=True)
+                most_likely = (
+                    f"{score_probability_table[0][0]}-{score_probability_table[0][1]}"
+                    if score_probability_table
+                    else "0-0"
+                )
+                top_score_probabilities = [
+                    {"score": f"{i}-{j}", "probability": round(float(p), 6)}
+                    for i, j, p in score_probability_table[:3]
+                ]
 
                 out.append(
                     {
                         "utcDate": fx.get("kickoff") or fx.get("utcDate"),
                         "matchday": int(fx.get("matchday") or 0),
-                        "home": home,
-                        "away": away,
+                        "home_team": home,
+                        "away_team": away,
                         "venue": fx.get("venue") or "Home",
-                        "xg_home": round(float(xg_home), 4),
-                        "xg_away": round(float(xg_away), 4),
-                        "home_win": float(p_home),
-                        "draw": float(p_draw),
-                        "away_win": float(p_away),
+                        "expected_home_goals": round(float(expected_home_goals), 4),
+                        "expected_away_goals": round(float(expected_away_goals), 4),
+                        "home_win_probability": float(home_win_probability),
+                        "draw_probability": float(draw_probability),
+                        "away_win_probability": float(away_win_probability),
                         "over_2_5": float(p_over_25),
                         "btts": float(p_btts),
                         "home_cs": float(p_home_cs),
                         "away_cs": float(p_away_cs),
                         "most_likely_score": most_likely,
-                        "top_scorelines": top3,
+                        "top_score_probabilities": top_score_probabilities,
+                        "team_strength": {
+                            "home_team": {
+                                "team_attacking_power": round(float(hs["team_attacking_power"]), 4),
+                                "team_defensive_strength": round(float(hs["team_defensive_strength"]), 4),
+                                "home_performance": round(float(hs["home_performance"]), 4),
+                                "away_performance": round(float(hs["away_performance"]), 4),
+                                "recent_form_rating": round(float(hs["recent_form_rating"]), 4),
+                            },
+                            "away_team": {
+                                "team_attacking_power": round(float(aw["team_attacking_power"]), 4),
+                                "team_defensive_strength": round(float(aw["team_defensive_strength"]), 4),
+                                "home_performance": round(float(aw["home_performance"]), 4),
+                                "away_performance": round(float(aw["away_performance"]), 4),
+                                "recent_form_rating": round(float(aw["recent_form_rating"]), 4),
+                            },
+                        },
                         "model": "poisson_v1",
-                        # compatibility aliases
-                        "p_home": float(p_home),
-                        "p_draw": float(p_draw),
-                        "p_away": float(p_away),
-                        "score_mode": most_likely,
-                        "over25": float(p_over_25),
-                        "home_win_prob": float(p_home),
-                        "draw_prob": float(p_draw),
-                        "away_win_prob": float(p_away),
-                        "over25_prob": float(p_over_25),
                     }
                 )
 

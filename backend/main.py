@@ -311,14 +311,14 @@ def _fetch_league_standings_api_football(code: str) -> List[Dict[str, Any]]:
                 "position": _to_int(row.get("rank"), 0),
                 "teamName": str(team.get("name") or ""),
                 "teamShort": str(team.get("code") or team.get("name") or ""),
-                "playedGames": _to_int(all_stats.get("played"), 0),
+                "matches_played": _to_int(all_stats.get("played"), 0),
                 "won": _to_int(all_stats.get("win"), 0),
                 "draw": _to_int(all_stats.get("draw"), 0),
                 "lost": _to_int(all_stats.get("lose"), 0),
                 "points": _to_int(row.get("points"), 0),
-                "goalsFor": gf,
-                "goalsAgainst": ga,
-                "goalDifference": _to_int(row.get("goalsDiff"), gf - ga),
+                "goals_scored": gf,
+                "goals_conceded": ga,
+                "goal_difference": _to_int(row.get("goalsDiff"), gf - ga),
                 "team": str(team.get("name") or ""),
             }
         )

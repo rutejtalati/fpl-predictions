@@ -101,11 +101,11 @@ def fetch_standings(comp_id: str) -> List[Dict[str, Any]]:
                 "position": int(r.get("position", 0) or 0),
                 "team_name": str(t.get("shortName") or t.get("name") or ""),
                 "team_id": int(t.get("id", 0) or 0),
-                "played": int(r.get("playedGames", 0) or 0),
+                "matches_played": int(r.get("playedGames", 0) or 0),
                 "points": int(r.get("points", 0) or 0),
-                "gf": gf,
-                "ga": ga,
-                "gd": gf - ga,
+                "goals_scored": gf,
+                "goals_conceded": ga,
+                "goal_difference": gf - ga,
             }
         )
     rows.sort(key=lambda x: x["position"])

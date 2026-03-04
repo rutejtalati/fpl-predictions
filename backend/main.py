@@ -193,9 +193,10 @@ def _provider_error_response(err: ProviderError) -> JSONResponse:
 
 
 def _api_football_headers() -> Dict[str, str]:
-    key = (os.getenv("APIFOOTBALL_API_KEY") or "").strip()
+    key = os.getenv("APIFOOTBALL_API_KEY")
     if not key:
         raise RuntimeError("APIFOOTBALL_API_KEY environment variable not set")
+
     return {
         "x-apisports-key": key,
         "Accept": "application/json",
@@ -1153,12 +1154,9 @@ def debug_environment():
 
 @app.get("/api/debug/env")
 def debug_env():
-    key = os.getenv("APIFOOTBALL_API_KEY", "")
     return {
-        "has_key": bool(key),
-        "key_len": len(key),
-        "key_prefix": key[:6],
-        "key_suffix": key[-4:],
+        "key_loaded": bool(os.getenv("APIFOOTBALL_API_KEY")),
+        "key_length": len(os.getenv("APIFOOTBALL_API_KEY", "")),
     }
 @app.get("/api/debug/key")
 def debug_key():

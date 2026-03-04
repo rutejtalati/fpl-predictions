@@ -25,18 +25,9 @@ class ApiFootballProvider:
     }
 
     def __init__(self):
-        self.rapidapi_key = os.getenv("RAPIDAPI_KEY")
-        self.apifootball_key = os.getenv("APIFOOTBALL_API_KEY")
-        print(
-            "[API Provider] RapidAPI key present:",
-            bool(self.rapidapi_key),
-            "API-Sports key present:",
-            bool(self.apifootball_key),
-        )
-        if not self.rapidapi_key and not self.apifootball_key:
-            raise RuntimeError(
-                "Either RAPIDAPI_KEY or APIFOOTBALL_API_KEY must be set in environment variables"
-            )
+        self.api_key = os.getenv("APIFOOTBALL_API_KEY")
+        if not self.api_key:
+            raise RuntimeError("APIFOOTBALL_API_KEY environment variable not set")
         self.base_url = self.BASE_URL
         self.season = self._configured_or_inferred_season()
         self.standings_ttl_seconds = int(os.getenv("APIFOOTBALL_STANDINGS_TTL_SECONDS", "1800"))
@@ -58,11 +49,9 @@ class ApiFootballProvider:
         self._logger = logging.getLogger(__name__)
 
     def _api_key(self) -> str:
-        key = (self.rapidapi_key or self.apifootball_key or "").strip()
+        key = (self.api_key or "").strip()
         if not key:
-            raise RuntimeError(
-                "Either RAPIDAPI_KEY or APIFOOTBALL_API_KEY must be set in environment variables"
-            )
+            raise RuntimeError("APIFOOTBALL_API_KEY environment variable not set")
         return key
 
     def _league_id(self, code: str) -> int:
@@ -72,15 +61,8 @@ class ApiFootballProvider:
         return league_id
 
     def _headers(self) -> Dict[str, str]:
-        if self.rapidapi_key:
-            return {
-                "x-rapidapi-key": self.rapidapi_key.strip(),
-                "x-rapidapi-host": "v3.football.api-sports.io",
-                "Accept": "application/json",
-            }
-
         return {
-            "x-apisports-key": self.apifootball_key.strip(),
+            "x-apisports-key": self._api_key(),
             "Accept": "application/json",
         }
 

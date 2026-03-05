@@ -34,16 +34,37 @@ load_dotenv(dotenv_path=BACKEND_DIR / ".env")
 
 app = FastAPI(title="FPL Predicted Points API", version="2.0.0")
 
-origins = [
-    "http://localhost",
-    "http://localhost:8000",
-    "http://127.0.0.1:8000",
-    "https://rutejtalati.github.io",
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:4173",
-    "http://127.0.0.1:4173",
-]
+def _normalize_origin(origin: str) -> str:
+    return origin.strip().rstrip("/")
+
+
+def _default_cors_origins() -> List[str]:
+    defaults = [
+        "https://rutejtalati.github.io",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ]
+    out: List[str] = []
+    for item in defaults:
+        origin = _normalize_origin(item)
+        if origin and origin not in out:
+            out.append(origin)
+    return out
+
+
+def _load_cors_origins() -> List[str]:
+    raw = (os.getenv("CORS_ORIGINS") or "").strip()
+    if not raw:
+        return _default_cors_origins()
+    out: List[str] = []
+    for item in raw.split(","):
+        origin = _normalize_origin(item)
+        if origin and origin not in out:
+            out.append(origin)
+    return out or _default_cors_origins()
+
+
+origins = _load_cors_origins()
 
 WIDGET_ALLOWED_ORIGINS = {
     x.strip().rstrip("/")
@@ -155,7 +176,7 @@ def api_provider() -> Dict[str, str]:
     return {"provider": football_provider.__class__.__name__}
 
 
-def _normalize_origin(value: str) -> str:
+def _normalize_request_origin(value: str) -> str:
     parsed = urlparse((value or "").strip())
     if not parsed.scheme or not parsed.netloc:
         return ""
@@ -164,7 +185,7 @@ def _normalize_origin(value: str) -> str:
 
 @app.get("/api/widget_key")
 def api_widget_key(request: Request) -> Dict[str, str]:
-    origin = _normalize_origin(request.headers.get("origin", ""))
+    origin = _normalize_request_origin(request.headers.get("origin", ""))
     if not origin or origin not in WIDGET_ALLOWED_ORIGINS:
         raise HTTPException(status_code=403, detail="Origin not allowed for widget key.")
     key = (os.getenv("APIFOOTBALL_API_KEY") or os.getenv("FOOTBALL_DATA_API_KEY") or "").strip()

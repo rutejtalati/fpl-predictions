@@ -1,1 +1,2 @@
 python-3.12.3
+VITE_API_BASE_URL=https://fpl-predictions.onrender.com

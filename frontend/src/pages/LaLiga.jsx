@@ -1,5 +1,5 @@
 import LeaguePredictionsPage from "./LeaguePredictionsPage";
 
 export default function LaLiga() {
-  return <LeaguePredictionsPage title="La Liga" endpoint="/predictions/laliga" />;
+  return <LeaguePredictionsPage title="La Liga" endpoint="/api/league/laliga/predictions" />;
 }

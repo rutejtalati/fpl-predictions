@@ -2,11 +2,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DndContext, useDraggable, useDroppable } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
+import WidgetsPage from "./WidgetsPage.jsx";
+import { buildApiUrl } from "./config/api";
+import { fetchJson, getErrorAttemptedUrl } from "./lib/http";
 import "./styles.css";
-
-const API_BASE = import.meta.env.VITE_API_BASE || "https://football-analytics-api.onrender.com";
-const api = (path) => `${API_BASE}${path}`;
-const WIDGETS_SCRIPT_URL = "https://widgets.api-sports.io/3.1.0/widgets.js";
 
 /**
  * IMPORTANT FIXES INCLUDED:
@@ -177,6 +176,31 @@ const APP_TITLE_OPTIONS = [
   "Football Stats & Forecasts",
 ];
 const APP_TITLE = "Football Analytics Hub";
+
+function pageFromPath(pathname) {
+  const path = String(pathname || "").toLowerCase();
+  if (path.endsWith("/widgets")) {
+    return "widgets";
+  }
+  return "table";
+}
+
+function syncPathForPage(page) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const target = page === "widgets" ? "/football_statistics/widgets" : "/football_statistics/";
+  if (window.location.pathname !== target) {
+    window.history.replaceState(null, "", target);
+  }
+}
+
+function describeFetchError(error, fallbackUrl) {
+  const attemptedUrl = getErrorAttemptedUrl(error) || fallbackUrl;
+  const detailMessage = error instanceof Error ? error.message : String(error);
+  const message = `Network error (likely CORS / wrong URL / backend down). URL: ${attemptedUrl}. Details: ${detailMessage}`;
+  return { message, attemptedUrl };
+}
 
 function compareValues(a, b, key) {
   if (key === "chance_play_pct") {
@@ -498,7 +522,7 @@ function PitchSlot({ slotId, p, mode, startGw, captainId, viceCaptainId, onSetC,
 }
 
 export default function App() {
-  const [page, setPage] = useState("table");
+  const [page, setPage] = useState(pageFromPath(typeof window !== "undefined" ? window.location.pathname : "/"));
   const [players, setPlayers] = useState([]);
   const [nextGw, setNextGw] = useState(null);
   const [startGw, setStartGw] = useState(null);
@@ -554,29 +578,26 @@ export default function App() {
   const [leagueData, setLeagueData] = useState({ fixtures: [], predictions: [], table: [], error: "" });
   const [leagueTable, setLeagueTable] = useState({ rows: [], loading: false, error: "" });
   const [leaguePredMeta, setLeaguePredMeta] = useState({ generatedAt: "", warnings: [], model: null });
-  const [widgetKey, setWidgetKey] = useState("");
-  const [widgetLoading, setWidgetLoading] = useState(false);
-  const [widgetError, setWidgetError] = useState("");
 
   const rowRefs = useRef({});
   const flashTimeoutRef = useRef(null);
-  const widgetScriptLoadedRef = useRef(false);
 
   const gwsShown = 3;
 
   const apiUrl = useMemo(() => {
     const sg = startGw ?? nextGw ?? "";
-    return `/api/players?gws=${gwsShown}&include_with_prob=true${sg ? `&start_gw=${sg}` : ""}`;
+    const query = {
+      gws: gwsShown,
+      include_with_prob: true,
+      start_gw: sg || undefined,
+    };
+    return buildApiUrl("/api/players", query);
   }, [startGw, nextGw]);
 
   // Fetch players
   useEffect(() => {
     setTableError("");
-    fetch(api(apiUrl))
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`API error ${res.status}`);
-        return res.json();
-      })
+    fetchJson(apiUrl)
       .then((data) => {
         const raw = data.players || [];
         const normed = raw.map(withNormPos);
@@ -584,68 +605,26 @@ export default function App() {
         setNextGw(data.next_gw ?? null);
         setStartGw((p) => (p == null ? (data.start_gw ?? data.next_gw ?? null) : p));
       })
-      .catch((e) => setTableError(String(e)));
+      .catch((error) => {
+        const desc = describeFetchError(error, apiUrl);
+        console.error("Players fetch failed:", error);
+        setTableError(desc.message);
+      });
   }, [apiUrl]);
 
   useEffect(() => {
-    fetch(api("/api/epl_table"))
-      .then(async (r) => {
-        if (!r.ok) throw new Error(`EPL table API error ${r.status}`);
-        return r.json();
-      })
+    const eplTableUrl = buildApiUrl("/api/epl_table");
+    fetchJson(eplTableUrl)
       .then((data) => setTeamRanks(data?.ranks || null))
-      .catch(() => setTeamRanks(null));
+      .catch((error) => {
+        console.error("EPL table fetch failed:", error);
+        setTeamRanks(null);
+      });
   }, []);
 
   useEffect(() => {
-    if (page !== "widgets" || widgetKey || widgetLoading) return;
-    let cancelled = false;
-    setWidgetLoading(true);
-    setWidgetError("");
-    fetch(api("/api/widget_key"))
-      .then(async (res) => {
-        if (!res.ok) {
-          const txt = await res.text().catch(() => "");
-          throw new Error(`Widget key endpoint failed (${res.status}). ${txt}`);
-        }
-        return res.json();
-      })
-      .then((data) => {
-        if (cancelled) return;
-        if (!data?.key) throw new Error("Widget key is missing in backend response.");
-        setWidgetKey(String(data.key));
-      })
-      .catch((e) => {
-        if (!cancelled) setWidgetError(String(e));
-      })
-      .finally(() => {
-        if (!cancelled) setWidgetLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [page, widgetKey, widgetLoading]);
-
-  useEffect(() => {
-    if (page !== "widgets" || !widgetKey || widgetScriptLoadedRef.current) return;
-    const existing = document.querySelector('script[data-api-sports-widgets="true"]');
-    if (existing) {
-      widgetScriptLoadedRef.current = true;
-      return;
-    }
-    const script = document.createElement("script");
-    script.type = "module";
-    script.src = WIDGETS_SCRIPT_URL;
-    script.crossOrigin = "anonymous";
-    script.setAttribute("data-api-sports-widgets", "true");
-    script.onload = () => {
-      widgetScriptLoadedRef.current = true;
-    };
-    script.onerror = () => {
-      setWidgetError("Could not load API-Sports widgets script.");
-    };
-    document.head.appendChild(script);
-  }, [page, widgetKey]);
+    syncPathForPage(page);
+  }, [page]);
 
   // Restore manual squad
   useEffect(() => {
@@ -930,16 +909,19 @@ export default function App() {
     setSquadError("");
     const id = parseTeamId(teamId);
     if (id == null) return setSquadError("Enter a valid Team ID (number).");
+    const squadUrl = buildApiUrl("/api/squad", { team_id: id });
     try {
-      const res = await fetch(api(`/api/squad?team_id=${id}`));
+      const res = await fetch(squadUrl);
       if (!res.ok) throw new Error(`Squad API error ${res.status}`);
       const data = await res.json();
       const picks = data.picks || [];
       setLoadedPicks(picks);
       setSquadIds(new Set(picks.map((x) => x.element)));
       setPage("table");
-    } catch (e) {
-      setSquadError(String(e));
+    } catch (error) {
+      const desc = describeFetchError(error, squadUrl);
+      console.error("Squad fetch failed:", error);
+      setSquadError(desc.message);
     }
   };
 
@@ -1140,8 +1122,9 @@ export default function App() {
     setTransferLoading(true);
     setTransferError("");
     setTransferResult(null);
+    const transferUrl = buildApiUrl("/api/transfer_suggestions");
     try {
-      const res = await fetch(api("/api/transfer_suggestions"), {
+      const res = await fetch(transferUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1157,8 +1140,10 @@ export default function App() {
       const data = await res.json();
       if (data?.error) throw new Error(data.error);
       setTransferResult(data);
-    } catch (e) {
-      setTransferError(String(e));
+    } catch (error) {
+      const desc = describeFetchError(error, transferUrl);
+      console.error("Transfer suggestions fetch failed:", error);
+      setTransferError(desc.message);
     } finally {
       setTransferLoading(false);
     }
@@ -1172,28 +1157,17 @@ export default function App() {
     setLeagueData({ fixtures: [], predictions: [], table: [], error: "" });
     setLeaguePredMeta({ generatedAt: "", warnings: [], model: null });
     setLeagueTable({ rows: [], loading: true, error: "" });
+    const fixturesUrl = buildApiUrl(`/api/league/${league.code}/fixtures`, { days: 14 });
+    const standingsUrl = buildApiUrl(`/api/league/${league.code}/standings`);
     try {
-      const [fxRes, tblRes] = await Promise.all([
-        fetch(api(`/api/league/${league.code}/fixtures?days=14`)),
-        fetch(api(`/api/league/${league.code}/standings`)),
-      ]);
-      if (!fxRes.ok) {
-        const text = await fxRes.text().catch(() => "");
-        throw new Error(`Fixtures endpoint unavailable (${fxRes.status}). ${text}`);
-      }
-      const fxData = await fxRes.json();
+      const [fxData, tblData] = await Promise.all([fetchJson(fixturesUrl), fetchJson(standingsUrl)]);
       setLeagueData({ fixtures: fxData?.fixtures || [], predictions: [], table: [], error: "" });
-
-      if (!tblRes.ok) {
-        const text = await tblRes.text().catch(() => "");
-        setLeagueTable({ rows: [], loading: false, error: `Could not load league table (${tblRes.status}). ${text}` });
-      } else {
-        const tblData = await tblRes.json();
-        const rows = Array.isArray(tblData?.standings) ? tblData.standings : [];
-        setLeagueTable({ rows, loading: false, error: "" });
-      }
-    } catch (e) {
-      setLeagueData({ fixtures: [], predictions: [], table: [], error: `Could not load fixtures for ${league.name}. ${String(e)}` });
+      const rows = Array.isArray(tblData?.standings) ? tblData.standings : [];
+      setLeagueTable({ rows, loading: false, error: "" });
+    } catch (error) {
+      const desc = describeFetchError(error, fixturesUrl);
+      console.error("League fixtures fetch failed:", error);
+      setLeagueData({ fixtures: [], predictions: [], table: [], error: `Could not load fixtures for ${league.name}. ${desc.message}` });
       setLeagueTable({ rows: [], loading: false, error: "" });
     } finally {
       setLeagueLoading(false);
@@ -1208,16 +1182,10 @@ export default function App() {
     setLeagueData({ fixtures: [], predictions: [], table: [], error: "" });
     setLeaguePredMeta({ generatedAt: "", warnings: [], model: null });
     setLeagueTable({ rows: [], loading: true, error: "" });
+    const predictionsUrl = buildApiUrl(`/api/league/${league.code}/predictions`, { days: 14 });
+    const standingsUrl = buildApiUrl(`/api/league/${league.code}/standings`);
     try {
-      const [predRes, tblRes] = await Promise.all([
-        fetch(api(`/api/league/${league.code}/predictions?days=14`)),
-        fetch(api(`/api/league/${league.code}/standings`)),
-      ]);
-      if (!predRes.ok) {
-        const text = await predRes.text().catch(() => "");
-        throw new Error(`Predictions endpoint unavailable (${predRes.status}). ${text}`);
-      }
-      const predData = await predRes.json();
+      const [predData, tblData] = await Promise.all([fetchJson(predictionsUrl), fetchJson(standingsUrl)]);
       console.log("[Predictions] Raw API response:", predData);
       console.log("[Predictions] Extracted rows:", predData?.predictions);
       setLeagueData({ fixtures: [], predictions: predData?.predictions || [], table: [], error: "" });
@@ -1226,17 +1194,12 @@ export default function App() {
         warnings: Array.isArray(predData?.warnings) ? predData.warnings : [],
         model: predData?.model || null,
       });
-
-      if (!tblRes.ok) {
-        const text = await tblRes.text().catch(() => "");
-        setLeagueTable({ rows: [], loading: false, error: `Could not load league table (${tblRes.status}). ${text}` });
-      } else {
-        const tblData = await tblRes.json();
-        const rows = Array.isArray(tblData?.standings) ? tblData.standings : [];
-        setLeagueTable({ rows, loading: false, error: "" });
-      }
-    } catch (e) {
-      setLeagueData({ fixtures: [], predictions: [], table: [], error: `Could not load predictions for ${league.name}. ${String(e)}` });
+      const rows = Array.isArray(tblData?.standings) ? tblData.standings : [];
+      setLeagueTable({ rows, loading: false, error: "" });
+    } catch (error) {
+      const desc = describeFetchError(error, predictionsUrl);
+      console.error("League predictions fetch failed:", error);
+      setLeagueData({ fixtures: [], predictions: [], table: [], error: `Could not load predictions for ${league.name}. ${desc.message}` });
       setLeaguePredMeta({ generatedAt: "", warnings: [], model: null });
       setLeagueTable({ rows: [], loading: false, error: "" });
     } finally {
@@ -1252,18 +1215,16 @@ export default function App() {
     setLeagueData({ fixtures: [], predictions: [], table: [], error: "" });
     setLeaguePredMeta({ generatedAt: "", warnings: [], model: null });
     setLeagueTable({ rows: [], loading: true, error: "" });
+    const standingsUrl = buildApiUrl(`/api/league/${league.code}/standings`);
     try {
-      const res = await fetch(api(`/api/league/${league.code}/standings`));
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        throw new Error(`Table endpoint unavailable (${res.status}). ${text}`);
-      }
-      const data = await res.json();
+      const data = await fetchJson(standingsUrl);
       const rows = Array.isArray(data?.standings) ? data.standings : [];
       setLeagueData({ fixtures: [], predictions: [], table: rows, error: "" });
       setLeagueTable({ rows, loading: false, error: "" });
-    } catch (e) {
-      setLeagueData({ fixtures: [], predictions: [], table: [], error: `Could not load table for ${league.name}. ${String(e)}` });
+    } catch (error) {
+      const desc = describeFetchError(error, standingsUrl);
+      console.error("League table fetch failed:", error);
+      setLeagueData({ fixtures: [], predictions: [], table: [], error: `Could not load table for ${league.name}. ${desc.message}` });
       setLeagueTable({ rows: [], loading: false, error: "" });
     } finally {
       setLeagueLoading(false);
@@ -1316,71 +1277,7 @@ export default function App() {
 
       <main className="content">
         {/* WIDGETS PAGE */}
-        {page === "widgets" ? (
-          <section className="panel">
-            <div className="row" style={{ justifyContent: "space-between" }}>
-              <h2>API-Sports Live Widgets</h2>
-              <button type="button" className="btn ghost" onClick={() => setPage("table")}>
-                Home
-              </button>
-            </div>
-            <p className="muted">
-              Dynamic targeting is enabled: click a league/team/game inside widgets to populate the right-side containers.
-            </p>
-            {widgetLoading ? <div className="muted">Loading widget access key...</div> : null}
-            {widgetError ? <div className="error">{widgetError}</div> : null}
-            {widgetKey ? (
-              <div className="widgetsLayout">
-                <api-sports-widget
-                  data-type="config"
-                  data-key={widgetKey}
-                  data-theme="dark"
-                  data-host="v3.football.api-sports.io"
-                  data-target-league="#widget-standings-content .widgetCardBody"
-                  data-target-team="#widget-team-content .widgetCardBody"
-                  data-target-game="#widget-game-content .widgetCardBody"
-                />
-
-                <div className="widgetCol">
-                  <h3>Leagues</h3>
-                  <div className="widgetCard">
-                    <div className="widgetCardBody">
-                      <api-sports-widget data-type="leagues" />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="widgetCol">
-                  <h3>Games</h3>
-                  <div className="widgetCard">
-                    <div className="widgetCardBody">
-                      <api-sports-widget data-type="games" />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="widgetCol widgetRightCol">
-                  <h3>Details</h3>
-                  <div id="widget-standings-content" className="widgetCard">
-                    <div className="widgetCardBody">
-                      <div className="widgetHint">Standings appear here after selecting a league.</div>
-                    </div>
-                  </div>
-                  <div id="widget-team-content" className="widgetCard">
-                    <div className="widgetCardBody">
-                      <div className="widgetHint">Team details appear here after selecting a team.</div>
-                    </div>
-                  </div>
-                  <div id="widget-game-content" className="widgetCard">
-                    <div className="widgetCardBody">
-                      <div className="widgetHint">Game details appear here after selecting a match.</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ) : null}
-          </section>
-        ) : null}
+        {page === "widgets" ? <WidgetsPage onBack={() => setPage("table")} /> : null}
 
         {/* LEAGUE PAGE */}
         {page === "league" ? (
